@@ -45,7 +45,7 @@ ScopeMaster.config = {
     scope_mode = "line",
     symbol = "|",
     highlight = "Comment",
-    namespace = vim.api.nvim_create_namespace("IndentLevel"),
+    namespace = vim.api.nvim_create_namespace("ScopeMaster"),
     greedy = true,
 }
 
@@ -53,9 +53,27 @@ ScopeMaster.config = {
 
 function ScopeMaster.setup(opts)
     ScopeMaster.config = vim.tbl_deep_extend("force", ScopeMaster.config, opts or {})
-    ScopeMaster.register_autocommands()
-    ScopeMaster.register_user_commands()
+    ScopeMaster.create_user_commands()
+    ScopeMaster.create_autocmds()
     ScopeMaster.draw()
+end
+
+
+
+function ScopeMaster.create_user_commands()
+    vim.api.nvim_create_user_command("ScopeMasterDraw",
+        function()
+            ScopeMaster.draw()
+        end,
+    { desc = "Draws the current line's indentation scope" })
+end
+
+
+
+function ScopeMaster.create_autocmds()
+    vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+        callback = function() ScopeMaster.draw() end,
+    })
 end
 
 
@@ -120,24 +138,6 @@ end
 
 function ScopeMaster.draw()
     ScopeMaster.draw_scope()
-end
-
-
-
-function ScopeMaster.register_user_commands()
-    vim.api.nvim_create_user_command("ScopeMasterDraw",
-        function()
-            ScopeMaster.draw()
-        end,
-    { desc = "Draws the current line's indentation scope" })
-end
-
-
-
-function ScopeMaster.register_autocommands()
-    vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
-        callback = function() ScopeMaster.draw() end,
-    })
 end
 
 
