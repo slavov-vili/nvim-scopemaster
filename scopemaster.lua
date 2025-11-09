@@ -59,11 +59,36 @@ function ScopeMaster.setup(opts)
     ScopeMaster.config = vim.tbl_deep_extend("force", ScopeMaster.config, opts or {})
     ScopeMaster.create_autocmds()
     ScopeMaster.create_user_commands()
+    ScopeMaster.create_text_objects()
     ScopeMaster.draw()
 end
 
 
 
+function ScopeMaster.create_text_objects()
+    vim.keymap.set({'o', 'x'}, 'aS', function()
+      ScopeMaster.select_scope(true)
+    end, {desc = 'Around current scope'})
+
+    vim.keymap.set({'o', 'x'}, 'iS', function()
+      ScopeMaster.select_scope()
+    end, {desc = 'Inside current scope'})
+end
+
+
+
+function ScopeMaster.select_scope(around)
+    local scope = ScopeMaster.find_scope()
+    if not scope then
+        return
+    end
+    local top = around and scope.top or scope.top + 1
+    local bot = around and scope.bot or scope.bot - 1
+
+    vim.cmd("normal! V")
+    vim.fn.setpos(".", {0, top, 1, 0})
+    vim.cmd("normal! o")
+    vim.fn.setpos(".", {0, bot, 1, 0})
 end
 
 
@@ -77,6 +102,19 @@ end
 
 
 function ScopeMaster.create_user_commands()
+
+    vim.api.nvim_create_user_command("ScopeMasterSelectA",
+        function()
+            ScopeMaster.select_scope(true)
+        end,
+    { desc = "Selects around the current line's indentation scope" })
+
+    vim.api.nvim_create_user_command("ScopeMasterSelectI",
+        function()
+            ScopeMaster.select_scope()
+        end,
+    { desc = "Selects inside the current line's indentation scope" })
+
     vim.api.nvim_create_user_command("ScopeMasterDraw",
         function()
             ScopeMaster.draw()
