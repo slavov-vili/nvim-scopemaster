@@ -10,6 +10,10 @@ local function get_last_lnum()
     return vim.fn.line("$")
 end
 
+local function get_lnum(lnum)
+    return lnum == nil and get_cur_lnum() or lnum
+end
+
 local function get_indent(lnum)
     return math.max(0, vim.fn.indent(lnum))
 end
@@ -53,9 +57,21 @@ ScopeMaster.config = {
 
 function ScopeMaster.setup(opts)
     ScopeMaster.config = vim.tbl_deep_extend("force", ScopeMaster.config, opts or {})
-    ScopeMaster.create_user_commands()
     ScopeMaster.create_autocmds()
+    ScopeMaster.create_user_commands()
     ScopeMaster.draw()
+end
+
+
+
+end
+
+
+
+function ScopeMaster.create_autocmds()
+    vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+        callback = function() ScopeMaster.draw() end,
+    })
 end
 
 
@@ -70,18 +86,22 @@ end
 
 
 
-function ScopeMaster.create_autocmds()
-    vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
-        callback = function() ScopeMaster.draw() end,
-    })
+function ScopeMaster.get_indent_for_scope(lnum)
+    local indent = get_indent(lnum)
+    if ScopeMaster.config.scope_mode == "cursor" then
+        indent = math.min(indent, vim.api.nvim_win_get_cursor(0)[2] + 1)
+    end
+    return indent
 end
 
 
 
+
 function ScopeMaster.find_scope(lnum)
-    local indent = get_indent(lnum)
-    if ScopeMaster.config.scope_mode == "cursor" then
-        indent = math.min(indent, vim.api.nvim_win_get_cursor(0)[2] + 1)
+    lnum = get_lnum(lnum)
+    local indent = ScopeMaster.get_indent_for_scope(lnum)
+    if indent <= 0 then
+        return nil
     end
     local top = find_border(lnum, indent, "top")
     local bot = find_border(lnum, indent, "bot")
@@ -104,15 +124,19 @@ end
 
 
 
-function ScopeMaster.draw_scope()
+function ScopeMaster.draw_scope(lnum)
     vim.api.nvim_buf_clear_namespace(0, ScopeMaster.config.namespace, 0, -1)
 
-    local lnum = get_cur_lnum()
-    if ScopeMaster.config.scope_mode == "" or get_indent(lnum) <= 0 then
+    if ScopeMaster.config.scope_mode == "" then
         return
     end
 
+    lnum = get_lnum(lnum)
     local scope = ScopeMaster.find_scope(lnum)
+    if not scope then
+        return
+    end
+
     print("Found scope: indent=" .. scope.indent .. ", top =" .. scope.top .. ", bot=" .. scope.bot)
 
     -- NOTE: extmarks are 0-based, but lnums are 1-based
