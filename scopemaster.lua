@@ -51,6 +51,10 @@ ScopeMaster.config = {
     highlight = "Comment",
     namespace = vim.api.nvim_create_namespace("ScopeMaster"),
     greedy = true,
+    text_objects = {
+        around = "S",
+        inside = "s",
+    },
 }
 
 
@@ -66,11 +70,11 @@ end
 
 
 function ScopeMaster.create_text_objects()
-    vim.keymap.set({'o', 'x'}, 'aS', function()
+    vim.keymap.set({'o', 'x'}, 'a'..ScopeMaster.config.text_objects.around, function()
       ScopeMaster.select_scope(true)
     end, {desc = 'Around current scope'})
 
-    vim.keymap.set({'o', 'x'}, 'iS', function()
+    vim.keymap.set({'o', 'x'}, 'i'..ScopeMaster.config.text_objects.inside, function()
       ScopeMaster.select_scope()
     end, {desc = 'Inside current scope'})
 end
