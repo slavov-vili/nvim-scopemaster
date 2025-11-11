@@ -6,6 +6,12 @@ local function get_cur_lnum()
     return vim.fn.line(".")
 end
 
+local function add_to_jumplist()
+    vim.cmd("normal! m'")
+    vim.cmd("normal! ''")
+end
+
+
 local function get_last_lnum()
     return vim.fn.line("$")
 end
@@ -83,7 +89,6 @@ end
 
 
 -- TODO: add motions for prev/next sibling (element with same scope)
--- FIXME: add to position list, so you can jump back?
 function ScopeMaster.create_motions()
     vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_left, function() ScopeMaster.goto_scope_horizontal("left") end, { desc = 'Go to the next scope to the left' })
     vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_right, function() ScopeMaster.goto_scope_horizontal("right") end, { desc = 'Go to the next scope to the right' })
@@ -149,6 +154,7 @@ end
 function ScopeMaster.goto_scope_end(border)
     local pos = vim.fn.getpos(".")
     pos[2] = ScopeMaster.find_scope_end(border)
+    add_to_jumplist()
     vim.fn.setpos(".", pos)
 end
 
@@ -240,7 +246,7 @@ end
 
 
 
-
+-- FIXME: does this even work outside the current line? cursor mode might break stuff
 function ScopeMaster.find_scope(lnum)
     lnum = get_lnum(lnum)
     local indent = ScopeMaster.get_indent_for_scope(lnum)
