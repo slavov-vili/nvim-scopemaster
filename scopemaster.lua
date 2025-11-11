@@ -14,6 +14,10 @@ local function get_lnum(lnum)
     return lnum == nil and get_cur_lnum() or lnum
 end
 
+local function get_indent_size()
+    return vim.fn.shiftwidth()
+end
+
 local function get_indent(lnum)
     return math.max(0, vim.fn.indent(lnum))
 end
@@ -25,7 +29,7 @@ end
 local function find_border(lnum, cur_indent, side)
     local increment = -1
     local next_lnum_finder = vim.fn.prevnonblank
-    if side == "bot" then
+    if side == "down" then
         increment = 1
         next_lnum_finder = function (lnum)
             local nextnonblank = vim.fn.nextnonblank(lnum)
@@ -52,8 +56,16 @@ ScopeMaster.config = {
     namespace = vim.api.nvim_create_namespace("ScopeMaster"),
     greedy = true,
     text_objects = {
-        around = "S",
-        inside = "s",
+        around = "aS",
+        inside = "iS",
+    },
+    motions = {
+        scope_left = "g[",
+        scope_right = "g]",
+        scope_start = "g(",
+        scope_end = "g)",
+        scope_next = "g>",
+        scope_prev = "g<",
     },
 }
 
@@ -63,18 +75,108 @@ function ScopeMaster.setup(opts)
     ScopeMaster.config = vim.tbl_deep_extend("force", ScopeMaster.config, opts or {})
     ScopeMaster.create_autocmds()
     ScopeMaster.create_user_commands()
+    ScopeMaster.create_motions()
     ScopeMaster.create_text_objects()
     ScopeMaster.draw()
 end
 
 
 
+-- TODO: add motions for prev/next sibling (element with same scope)
+-- FIXME: add to position list, so you can jump back?
+function ScopeMaster.create_motions()
+    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_left, function() ScopeMaster.goto_scope_horizontal("left") end, { desc = 'Go to the next scope to the left' })
+    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_right, function() ScopeMaster.goto_scope_horizontal("right") end, { desc = 'Go to the next scope to the right' })
+
+    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_start, function() ScopeMaster.goto_scope_end("top") end, { desc = 'Go to the top end of the current scope' })
+    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_end, function() ScopeMaster.goto_scope_end("bot") end, { desc = 'Go to the bot end of the current scope' })
+
+    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_prev, function() ScopeMaster.goto_scope_vertical("up") end, { desc = 'Go to the beginning of the next nested indentation scope' })
+    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_next, function() ScopeMaster.goto_scope_vertical("down") end, { desc = 'Go to the beginning of the next nested indentation scope' })
+end
+
+
+
+function ScopeMaster.goto_scope_horizontal(direction)
+    local lnum = get_cur_lnum()
+    local indent_size = get_indent_size()
+    local pos = vim.fn.getpos(".")
+    local max_indent = get_indent(lnum)
+
+    local limit_enforcer = function(next_indent) return math.max(0, next_indent) end
+    local increment = -indent_size
+    if direction == "right" then
+        limit_enforcer = function(next_indent) return math.min(max_indent, next_indent) end
+        increment = indent_size
+    end
+
+    local next_indent = pos[3] + increment
+    next_indent = next_indent - (next_indent % indent_size) + 1
+    pos[2] = lnum
+    pos[3] = limit_enforcer(next_indent)
+    vim.fn.setpos(".", pos)
+end
+
+
+
+function ScopeMaster.goto_scope_vertical(direction)
+    local lnum = get_cur_lnum()
+    local indent = get_indent(lnum)
+
+    local next_line = vim.fn.nextnonblank
+    local increment = 1
+    if direction == "up" then
+        next_line = function(lnum)
+            local lnum_prev = vim.fn.prevnonblank(lnum)
+            return ScopeMaster.find_scope_end("top", lnum_prev)
+        end
+        increment = -1
+    end
+
+    local next_indent = indent
+    while next_indent == indent do
+        lnum = next_line(lnum + increment)
+        next_indent = get_indent(lnum)
+    end
+
+    local pos = vim.fn.getpos(".")
+    pos[2] = lnum
+    vim.fn.setpos(".", pos)
+end
+
+
+
+function ScopeMaster.goto_scope_end(border)
+    local pos = vim.fn.getpos(".")
+    pos[2] = ScopeMaster.find_scope_end(border)
+    vim.fn.setpos(".", pos)
+end
+
+
+
+function ScopeMaster.find_scope_end(border, lnum)
+    local scope = ScopeMaster.find_scope(lnum)
+    if not scope then
+        return
+    end
+
+    local lnum_end = scope[border]
+    if not lnum_end then
+        return
+    end
+
+    local increment = border == "top" and 1 or -1
+    return lnum_end + increment
+end
+
+
+
 function ScopeMaster.create_text_objects()
-    vim.keymap.set({'o', 'x'}, 'a'..ScopeMaster.config.text_objects.around, function()
+    vim.keymap.set({'o', 'x'}, ScopeMaster.config.text_objects.around, function()
       ScopeMaster.select_scope(true)
     end, {desc = 'Around current scope'})
 
-    vim.keymap.set({'o', 'x'}, 'i'..ScopeMaster.config.text_objects.inside, function()
+    vim.keymap.set({'o', 'x'}, ScopeMaster.config.text_objects.inside, function()
       ScopeMaster.select_scope()
     end, {desc = 'Inside current scope'})
 end
@@ -145,8 +247,8 @@ function ScopeMaster.find_scope(lnum)
     if indent <= 0 then
         return nil
     end
-    local top = find_border(lnum, indent, "top")
-    local bot = find_border(lnum, indent, "bot")
+    local top = find_border(lnum, indent, "up")
+    local bot = find_border(lnum, indent, "down")
     -- TODO: add config on whether to get top, bot or min or something?
     local border_indent = get_indent(top)
     return {
