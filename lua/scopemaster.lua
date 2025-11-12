@@ -55,6 +55,12 @@ end
 
 
 
+local Condition = {}
+Condition.equals = function(a, b) return a == b end
+Condition.notequals = function(a, b) return a ~= b end
+
+
+
 ScopeMaster.config = {
     scope_mode = "line",
     symbol = "|",
@@ -70,8 +76,10 @@ ScopeMaster.config = {
         scope_right = "g]",
         scope_start = "g(",
         scope_end = "g)",
-        scope_next = "g>",
         scope_prev = "g<",
+        scope_next = "g>",
+        sibling_prev = "g{",
+        sibling_next = "g}",
     },
 }
 
@@ -88,16 +96,34 @@ end
 
 
 
--- TODO: add motions for prev/next sibling (element with same scope)
 function ScopeMaster.create_motions()
-    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_left, function() ScopeMaster.goto_scope_horizontal("left") end, { desc = 'Go to the next scope to the left' })
-    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_right, function() ScopeMaster.goto_scope_horizontal("right") end, { desc = 'Go to the next scope to the right' })
+    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_left, function()
+        ScopeMaster.goto_scope_horizontal("left")
+    end, { desc = 'Go to the next scope to the left' })
+    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_right, function()
+        ScopeMaster.goto_scope_horizontal("right")
+    end, { desc = 'Go to the next scope to the right' })
 
-    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_start, function() ScopeMaster.goto_scope_end("top") end, { desc = 'Go to the top end of the current scope' })
-    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_end, function() ScopeMaster.goto_scope_end("bot") end, { desc = 'Go to the bot end of the current scope' })
+    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_start, function()
+        ScopeMaster.goto_scope_end("top")
+    end, { desc = 'Go to the top end of the current scope' })
+    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_end, function()
+        ScopeMaster.goto_scope_end("bot")
+    end, { desc = 'Go to the bot end of the current scope' })
 
-    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_prev, function() ScopeMaster.goto_scope_vertical("up") end, { desc = 'Go to the beginning of the next nested indentation scope' })
-    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_next, function() ScopeMaster.goto_scope_vertical("down") end, { desc = 'Go to the beginning of the next nested indentation scope' })
+    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_prev, function()
+        ScopeMaster.goto_scope_vertical("up", Condition.notequals)
+    end, { desc = 'Go to the beginning of the next nested indentation scope' })
+    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_next, function()
+        ScopeMaster.goto_scope_vertical("down", Condition.notequals)
+    end, { desc = 'Go to the beginning of the next nested indentation scope' })
+
+    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.sibling_prev, function()
+        ScopeMaster.goto_scope_vertical("up", Condition.equals, true)
+    end, { desc = 'Go to the beginning of the next sibling indentation scope' })
+    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.sibling_next, function()
+        ScopeMaster.goto_scope_vertical("down", Condition.equals, true)
+    end, { desc = 'Go to the beginning of the next sibling indentation scope' })
 end
 
 
@@ -105,7 +131,6 @@ end
 function ScopeMaster.goto_scope_horizontal(direction)
     local lnum = get_cur_lnum()
     local indent_size = get_indent_size()
-    local pos = vim.fn.getpos(".")
     local max_indent = get_indent(lnum)
 
     local limit_enforcer = function(next_indent) return math.max(0, next_indent) end
@@ -115,37 +140,41 @@ function ScopeMaster.goto_scope_horizontal(direction)
         increment = indent_size
     end
 
-    local next_indent = pos[3] + increment
-    next_indent = next_indent - (next_indent % indent_size) + 1
+    local count = vim.v.count1
+    local pos = vim.fn.getpos(".")
+    local next_indent = pos[3] + count * increment
+    next_indent = next_indent - (next_indent % indent_size)
     pos[2] = lnum
-    pos[3] = limit_enforcer(next_indent)
+    pos[3] = limit_enforcer(next_indent) + 1
     vim.fn.setpos(".", pos)
 end
 
 
 
-function ScopeMaster.goto_scope_vertical(direction)
-    local lnum = get_cur_lnum()
-    local indent = get_indent(lnum)
-
+function ScopeMaster.goto_scope_vertical(direction, condition, is_jump)
     local next_line = vim.fn.nextnonblank
     local increment = 1
     if direction == "up" then
-        next_line = function(lnum)
-            local lnum_prev = vim.fn.prevnonblank(lnum)
-            return ScopeMaster.find_scope_end("top", lnum_prev)
-        end
+        next_line = vim.fn.prevnonblank
         increment = -1
     end
 
-    local next_indent = indent
-    while next_indent == indent do
-        lnum = next_line(lnum + increment)
-        next_indent = get_indent(lnum)
+    local lnum = get_cur_lnum()
+    local next_indent = nil
+    for _ = 1, vim.v.count1 do
+        local indent = get_indent(lnum)
+        repeat
+            lnum = next_line(lnum + increment)
+            next_indent = get_indent(lnum)
+        until condition(indent, next_indent)
     end
 
     local pos = vim.fn.getpos(".")
     pos[2] = lnum
+    pos[3] = next_indent + 1
+    if is_jump then
+        add_to_jumplist()
+    end
     vim.fn.setpos(".", pos)
 end
 
@@ -274,6 +303,7 @@ end
 
 
 
+-- FIXME: come up with solution for empty lines (scope of last non-blank?)
 function ScopeMaster.draw_scope(lnum)
     vim.api.nvim_buf_clear_namespace(0, ScopeMaster.config.namespace, 0, -1)
 
@@ -287,7 +317,7 @@ function ScopeMaster.draw_scope(lnum)
         return
     end
 
-    print("Found scope: indent=" .. scope.indent .. ", top =" .. scope.top .. ", bot=" .. scope.bot)
+    -- print("Found scope: indent=" .. scope.indent .. ", top =" .. scope.top .. ", bot=" .. scope.bot)
 
     -- NOTE: extmarks are 0-based, but lnums are 1-based
     for lnum_extmark = scope.top, ScopeMaster.get_bot_border_for_draw(scope.bot) - 1 do
