@@ -96,34 +96,98 @@ end
 
 
 
+function ScopeMaster.create_autocmds()
+    vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+        callback = function() ScopeMaster.draw() end,
+    })
+end
+
+
+
+function ScopeMaster.create_user_commands()
+
+    vim.api.nvim_create_user_command("ScopeMasterSelectA",
+        function()
+            ScopeMaster.select_scope(true)
+        end,
+    { desc = "Selects around the current line's indentation scope" })
+
+    vim.api.nvim_create_user_command("ScopeMasterSelectI",
+        function()
+            ScopeMaster.select_scope()
+        end,
+    { desc = "Selects inside the current line's indentation scope" })
+
+    vim.api.nvim_create_user_command("ScopeMasterDraw",
+        function()
+            ScopeMaster.draw()
+        end,
+    { desc = "Draws the current line's indentation scope" })
+end
+
+
+
+function ScopeMaster.create_text_objects()
+    vim.keymap.set({'o', 'x'}, ScopeMaster.config.text_objects.around, function()
+      ScopeMaster.select_scope(true)
+    end, {desc = 'Around current scope'})
+
+    vim.keymap.set({'o', 'x'}, ScopeMaster.config.text_objects.inside, function()
+      ScopeMaster.select_scope()
+    end, {desc = 'Inside current scope'})
+end
+
+
+
+function ScopeMaster.select_scope(around)
+    local scope = ScopeMaster.find_scope()
+    local top = around and scope.top or scope.top + 1
+    local bot = around and scope.bot or scope.bot - 1
+
+    vim.cmd("normal! V")
+    set_cur_pos({0, top, 1, 0})
+    vim.cmd("normal! o")
+    set_cur_pos({0, bot, 1, 0})
+end
+
+
+
 function ScopeMaster.create_motions()
-    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_left, function()
-        ScopeMaster.goto_scope_horizontal("left")
-    end, { desc = 'Go to the next scope to the left' })
-    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_right, function()
-        ScopeMaster.goto_scope_horizontal("right")
-    end, { desc = 'Go to the next scope to the right' })
+    ScopeMaster.create_motion(ScopeMaster.config.motions.scope_left,
+    function() ScopeMaster.goto_scope_horizontal("left") end,
+    'Go to the next scope to the left')
 
-    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_start, function()
-        ScopeMaster.goto_scope_end("top")
-    end, { desc = 'Go to the top end of the current scope' })
-    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_end, function()
-        ScopeMaster.goto_scope_end("bot")
-    end, { desc = 'Go to the bot end of the current scope' })
+    ScopeMaster.create_motion(ScopeMaster.config.motions.scope_right,
+    function() ScopeMaster.goto_scope_horizontal("right") end,
+    'Go to the next scope to the right')
 
-    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_prev, function()
-        ScopeMaster.goto_scope_vertical("up", Condition.notequals)
-    end, { desc = 'Go to the beginning of the next nested indentation scope' })
-    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.scope_next, function()
-        ScopeMaster.goto_scope_vertical("down", Condition.notequals)
-    end, { desc = 'Go to the beginning of the next nested indentation scope' })
+    ScopeMaster.create_motion(ScopeMaster.config.motions.scope_start,
+    function() ScopeMaster.goto_scope_end("top") end,
+    'Go to the top end of the current scope')
 
-    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.sibling_prev, function()
-        ScopeMaster.goto_scope_vertical("up", Condition.equals, true)
-    end, { desc = 'Go to the beginning of the next sibling indentation scope' })
-    vim.keymap.set({'n','o','x'}, ScopeMaster.config.motions.sibling_next, function()
-        ScopeMaster.goto_scope_vertical("down", Condition.equals, true)
-    end, { desc = 'Go to the beginning of the next sibling indentation scope' })
+    ScopeMaster.create_motion(ScopeMaster.config.motions.scope_end,
+    function() ScopeMaster.goto_scope_end("bot") end,
+    'Go to the bot end of the current scope')
+
+    ScopeMaster.create_motion(ScopeMaster.config.motions.scope_prev,
+    function() ScopeMaster.goto_scope_vertical("up", Condition.notequals) end,
+    'Go to the end of the previous differing scope')
+
+    ScopeMaster.create_motion(ScopeMaster.config.motions.scope_next,
+    function() ScopeMaster.goto_scope_vertical("down", Condition.notequals) end,
+    'Go to the beginning of the next differing indentation scope')
+
+    ScopeMaster.create_motion(ScopeMaster.config.motions.sibling_prev,
+    function() ScopeMaster.goto_scope_vertical("up", Condition.equals, true) end,
+    'Go to the previous sibling scope')
+
+    ScopeMaster.create_motion(ScopeMaster.config.motions.sibling_next,
+    function() ScopeMaster.goto_scope_vertical("down", Condition.equals, true) end,
+    'Go to the next sibling indentation scope')
+end
+
+function ScopeMaster.create_motion(keymap, func, desc)
+    vim.keymap.set({'n','o','x'}, keymap, func, { desc = desc })
 end
 
 
@@ -206,61 +270,6 @@ end
 
 
 
-function ScopeMaster.create_text_objects()
-    vim.keymap.set({'o', 'x'}, ScopeMaster.config.text_objects.around, function()
-      ScopeMaster.select_scope(true)
-    end, {desc = 'Around current scope'})
-
-    vim.keymap.set({'o', 'x'}, ScopeMaster.config.text_objects.inside, function()
-      ScopeMaster.select_scope()
-    end, {desc = 'Inside current scope'})
-end
-
-
-
-function ScopeMaster.select_scope(around)
-    local scope = ScopeMaster.find_scope()
-    if not scope then
-        return
-    end
-    local top = around and scope.top or scope.top + 1
-    local bot = around and scope.bot or scope.bot - 1
-
-    vim.cmd("normal! V")
-    vim.fn.setpos(".", {0, top, 1, 0})
-    vim.cmd("normal! o")
-    vim.fn.setpos(".", {0, bot, 1, 0})
-end
-
-
-
-function ScopeMaster.create_autocmds()
-    vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
-        callback = function() ScopeMaster.draw() end,
-    })
-end
-
-
-
-function ScopeMaster.create_user_commands()
-
-    vim.api.nvim_create_user_command("ScopeMasterSelectA",
-        function()
-            ScopeMaster.select_scope(true)
-        end,
-    { desc = "Selects around the current line's indentation scope" })
-
-    vim.api.nvim_create_user_command("ScopeMasterSelectI",
-        function()
-            ScopeMaster.select_scope()
-        end,
-    { desc = "Selects inside the current line's indentation scope" })
-
-    vim.api.nvim_create_user_command("ScopeMasterDraw",
-        function()
-            ScopeMaster.draw()
-        end,
-    { desc = "Draws the current line's indentation scope" })
 end
 
 
