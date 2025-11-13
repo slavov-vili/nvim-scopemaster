@@ -6,9 +6,20 @@ local function get_cur_lnum()
     return vim.fn.line(".")
 end
 
+local function get_cur_col()
+    return vim.api.nvim_win_get_cursor(0)[2] + 1
+end
+
+local function get_cur_pos()
+    return vim.fn.getpos(".")
+end
+
+local function set_cur_pos(new_pos)
+    vim.fn.setpos(".", new_pos)
+end
+
 local function add_to_jumplist()
     vim.cmd("normal! m'")
-    vim.cmd("normal! ''")
 end
 
 
@@ -25,17 +36,21 @@ local function get_indent_size()
 end
 
 local function get_indent(lnum)
-    return math.max(0, vim.fn.indent(lnum))
+    return vim.fn.indent(lnum)
 end
 
-local function pad_line(text, pad_size)
-    return string.rep(' ', pad_size) .. text
+local function needs_padding(lnum, col)
+    return vim.fn.col({lnum + 1, "$"}) < col
 end
 
-local function find_border(lnum, cur_indent, side)
+local function get_padding(pad_size)
+    return string.rep(' ', pad_size)
+end
+
+local function find_border(lnum, cur_indent, direction)
     local increment = -1
     local next_lnum_finder = vim.fn.prevnonblank
-    if side == "down" then
+    if direction == "down" then
         increment = 1
         next_lnum_finder = function (lnum)
             local nextnonblank = vim.fn.nextnonblank(lnum)
@@ -43,12 +58,12 @@ local function find_border(lnum, cur_indent, side)
         end
     end
 
-    local next_indent = cur_indent
     local next_lnum = lnum
-    while next_indent >= cur_indent and lnum > 0 and lnum <= get_last_lnum() do
+    local next_indent = cur_indent
+    repeat
         next_lnum = next_lnum_finder(next_lnum + increment)
         next_indent = get_indent(next_lnum)
-    end
+    until next_indent < cur_indent
 
     return next_lnum
 end
@@ -205,12 +220,12 @@ function ScopeMaster.goto_scope_horizontal(direction)
     end
 
     local count = vim.v.count1
-    local pos = vim.fn.getpos(".")
+    local pos = get_cur_pos()
     local next_indent = pos[3] + count * increment
     next_indent = next_indent - (next_indent % indent_size)
     pos[2] = lnum
     pos[3] = limit_enforcer(next_indent) + 1
-    vim.fn.setpos(".", pos)
+    set_cur_pos(pos)
 end
 
 
@@ -233,43 +248,44 @@ function ScopeMaster.goto_scope_vertical(direction, condition, is_jump)
         until condition(indent, next_indent)
     end
 
-    local pos = vim.fn.getpos(".")
+    local pos = get_cur_pos()
     pos[2] = lnum
     pos[3] = next_indent + 1
     if is_jump then
         add_to_jumplist()
     end
-    vim.fn.setpos(".", pos)
+    set_cur_pos(pos)
 end
 
 
 
 function ScopeMaster.goto_scope_end(border)
-    local pos = vim.fn.getpos(".")
+    local pos = get_cur_pos()
     pos[2] = ScopeMaster.find_scope_end(border)
     add_to_jumplist()
-    vim.fn.setpos(".", pos)
+    set_cur_pos(pos)
 end
 
 
 
-function ScopeMaster.find_scope_end(border, lnum)
-    local scope = ScopeMaster.find_scope(lnum)
-    if not scope then
-        return
+function ScopeMaster.find_scope_end(border)
+    local scope = ScopeMaster.find_scope()
+
+    local lnum_end = scope["top"]
+    local increment = 1
+    if border == "bot" then
+        lnum_end = scope["bot"]
+        increment = -1
     end
 
-    local lnum_end = scope[border]
-    if not lnum_end then
-        return
-    end
-
-    local increment = border == "top" and 1 or -1
     return lnum_end + increment
 end
 
 
 
+function ScopeMaster.get_bot_for_scope(scope)
+    local bot = scope.bot - 1
+    return ScopeMaster.config.greedy and bot or vim.fn.prevnonblank(bot)
 end
 
 
@@ -277,27 +293,23 @@ end
 function ScopeMaster.get_indent_for_scope(lnum)
     local indent = get_indent(lnum)
     if ScopeMaster.config.scope_mode == "cursor" then
-        indent = math.min(indent, vim.api.nvim_win_get_cursor(0)[2] + 1)
+        indent = math.min(indent, get_cur_col())
+        local indent_size = get_indent_size()
+        indent = math.ceil(indent / indent_size) * indent_size
     end
     return indent
 end
 
 
 
--- FIXME: does this even work outside the current line? cursor mode might break stuff
-function ScopeMaster.find_scope(lnum)
-    lnum = get_lnum(lnum)
+function ScopeMaster.find_scope()
+    local lnum = get_cur_lnum()
     local indent = ScopeMaster.get_indent_for_scope(lnum)
-    if indent <= 0 then
-        return nil
-    end
+
     local top = find_border(lnum, indent, "up")
     local bot = find_border(lnum, indent, "down")
-    -- TODO: add config on whether to get top, bot or min or something?
-    local border_indent = get_indent(top)
     return {
         indent = indent,
-        border_indent = border_indent,
         top = top,
         bot = bot,
     }
@@ -305,43 +317,35 @@ end
 
 
 
-function ScopeMaster.get_bot_border_for_draw(lnum)
-    local lnum_for_draw = lnum - 1
-    return ScopeMaster.config.greedy and lnum_for_draw or vim.fn.prevnonblank(lnum_for_draw)
-end
-
-
-
 -- FIXME: come up with solution for empty lines (scope of last non-blank?)
-function ScopeMaster.draw_scope(lnum)
+function ScopeMaster.draw_scope()
     vim.api.nvim_buf_clear_namespace(0, ScopeMaster.config.namespace, 0, -1)
 
     if ScopeMaster.config.scope_mode == "" then
         return
     end
 
-    lnum = get_lnum(lnum)
-    local scope = ScopeMaster.find_scope(lnum)
-    if not scope then
+    local scope = ScopeMaster.find_scope()
+    if scope.indent == 0 then
         return
     end
 
     -- print("Found scope: indent=" .. scope.indent .. ", top =" .. scope.top .. ", bot=" .. scope.bot)
 
     -- NOTE: extmarks are 0-based, but lnums are 1-based
-    for lnum_extmark = scope.top, ScopeMaster.get_bot_border_for_draw(scope.bot) - 1 do
-        local extmark_level = scope.border_indent
+    -- although top is the border, the extmark is drawn on the next line
+    -- Bot needs to be decremented
+    for lnum_extmark = scope.top, ScopeMaster.get_bot_for_scope(scope) - 1 do
+        local extmark_level = scope.indent - get_indent_size()
         local virt_text = ScopeMaster.config.symbol
 
-        if vim.fn.col({lnum_extmark + 1, "$"}) < extmark_level then
-            virt_text = pad_line(virt_text, extmark_level)
+        if needs_padding(lnum_extmark, extmark_level) then
+            virt_text = get_padding(lnum_extmark, extmark_level) .. virt_text
             extmark_level = 0
         end
 
         vim.api.nvim_buf_set_extmark(0, ScopeMaster.config.namespace, lnum_extmark, extmark_level, {
-            virt_text = {
-                { virt_text, ScopeMaster.config.highlight }
-            },
+            virt_text = { { virt_text, ScopeMaster.config.highlight } },
             virt_text_pos = "overlay"
         })
     end
