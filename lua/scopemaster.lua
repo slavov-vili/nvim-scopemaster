@@ -18,10 +18,6 @@ local function set_cur_pos(new_pos)
     vim.fn.setpos(".", new_pos)
 end
 
-local function add_to_jumplist()
-    vim.cmd("normal! m'")
-end
-
 
 local function get_last_lnum()
     return vim.fn.line("$")
@@ -39,12 +35,16 @@ local function get_indent(lnum)
     return vim.fn.indent(lnum)
 end
 
-local function needs_padding(lnum, col)
-    return vim.fn.col({lnum + 1, "$"}) < col
+local function is_empty_line(lnum)
+    return vim.fn.col({lnum, "$"}) == 1
 end
 
 local function get_padding(pad_size)
     return string.rep(' ', pad_size)
+end
+
+local function add_to_jumplist()
+    vim.cmd("normal! m'")
 end
 
 local function find_border(lnum, cur_indent, direction)
@@ -259,17 +259,18 @@ end
 
 
 
+-- FIXME: empty lines are always at cursor position 0, which breaks things... (going from indent 8 to empty line, now can't go back, because the line is at 0)
 function ScopeMaster.goto_scope_end(border)
     local pos = get_cur_pos()
-    pos[2] = ScopeMaster.find_scope_end(border)
+    pos[2] = ScopeMaster.find_scope_end(pos[2], border)
     add_to_jumplist()
     set_cur_pos(pos)
 end
 
 
 
-function ScopeMaster.find_scope_end(border)
-    local scope = ScopeMaster.find_scope()
+function ScopeMaster.find_scope_end(lnum, border)
+    local scope = ScopeMaster.find_scope(lnum)
 
     local lnum_end = scope["top"]
     local increment = 1
@@ -291,6 +292,7 @@ end
 
 
 function ScopeMaster.get_indent_for_scope(lnum)
+    local lnum = is_empty_line(lnum) and vim.fn.prevnonblank(lnum - 1) or lnum
     local indent = get_indent(lnum)
     if ScopeMaster.config.scope_mode == "cursor" then
         indent = math.min(indent, get_cur_col())
@@ -302,8 +304,8 @@ end
 
 
 
-function ScopeMaster.find_scope()
-    local lnum = get_cur_lnum()
+function ScopeMaster.find_scope(lnum)
+    local lnum = get_lnum(lnum)
     local indent = ScopeMaster.get_indent_for_scope(lnum)
 
     local top = find_border(lnum, indent, "up")
@@ -317,15 +319,15 @@ end
 
 
 
--- FIXME: come up with solution for empty lines (scope of last non-blank?)
-function ScopeMaster.draw_scope()
+-- FIXME: breaks when there are tabs (tab = 1 col, but 4 spaces :()
+function ScopeMaster.draw_scope(lnum)
     vim.api.nvim_buf_clear_namespace(0, ScopeMaster.config.namespace, 0, -1)
 
     if ScopeMaster.config.scope_mode == "" then
         return
     end
 
-    local scope = ScopeMaster.find_scope()
+    local scope = ScopeMaster.find_scope(lnum)
     if scope.indent == 0 then
         return
     end
@@ -339,8 +341,8 @@ function ScopeMaster.draw_scope()
         local extmark_level = scope.indent - get_indent_size()
         local virt_text = ScopeMaster.config.symbol
 
-        if needs_padding(lnum_extmark, extmark_level) then
-            virt_text = get_padding(lnum_extmark, extmark_level) .. virt_text
+        if is_empty_line(lnum_extmark + 1) then
+            virt_text = get_padding(extmark_level) .. virt_text
             extmark_level = 0
         end
 
@@ -354,7 +356,7 @@ end
 
 
 function ScopeMaster.draw()
-    ScopeMaster.draw_scope()
+    ScopeMaster.draw_scope(get_cur_lnum())
 end
 
 
