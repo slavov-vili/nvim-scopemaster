@@ -7,7 +7,7 @@ local function get_cur_lnum()
 end
 
 local function get_cur_col()
-    return vim.api.nvim_win_get_cursor(0)[2] + 1
+    return vim.fn.virtcol(".", 1)[1]
 end
 
 local function get_cur_pos()
@@ -262,31 +262,22 @@ end
 -- FIXME: empty lines are always at cursor position 0, which breaks things... (going from indent 8 to empty line, now can't go back, because the line is at 0)
 function ScopeMaster.goto_scope_end(border)
     local pos = get_cur_pos()
-    pos[2] = ScopeMaster.find_scope_end(pos[2], border)
+    local scope = ScopeMaster.find_scope(pos[2])
+    pos[2] = ScopeMaster.get_scope_end(scope, border)
     add_to_jumplist()
     set_cur_pos(pos)
 end
 
 
 
-function ScopeMaster.find_scope_end(lnum, border)
-    local scope = ScopeMaster.find_scope(lnum)
-
-    local lnum_end = scope["top"]
-    local increment = 1
+function ScopeMaster.get_scope_end(scope, border)
+    local lnum_border = scope[border]
     if border == "bot" then
-        lnum_end = scope["bot"]
-        increment = -1
+        local lnum_end = lnum_border - 1
+        return ScopeMaster.config.greedy and lnum_end or vim.fn.prevnonblank(lnum_end)
     end
 
-    return lnum_end + increment
-end
-
-
-
-function ScopeMaster.get_bot_for_scope(scope)
-    local bot = scope.bot - 1
-    return ScopeMaster.config.greedy and bot or vim.fn.prevnonblank(bot)
+    return scope["top"] + 1
 end
 
 
@@ -319,8 +310,8 @@ end
 
 
 
--- FIXME: breaks when there are tabs (tab = 1 col, but 4 spaces :()
 function ScopeMaster.draw_scope(lnum)
+    -- FIXME: only clear if indent changes?
     vim.api.nvim_buf_clear_namespace(0, ScopeMaster.config.namespace, 0, -1)
 
     if ScopeMaster.config.scope_mode == "" then
@@ -337,7 +328,7 @@ function ScopeMaster.draw_scope(lnum)
     -- NOTE: extmarks are 0-based, but lnums are 1-based
     -- although top is the border, the extmark is drawn on the next line
     -- Bot needs to be decremented
-    for lnum_extmark = scope.top, ScopeMaster.get_bot_for_scope(scope) - 1 do
+    for lnum_extmark = scope.top, ScopeMaster.get_scope_end(scope, "bot") - 1 do
         local extmark_level = scope.indent - get_indent_size()
         local virt_text = ScopeMaster.config.symbol
 
@@ -346,9 +337,9 @@ function ScopeMaster.draw_scope(lnum)
             extmark_level = 0
         end
 
-        vim.api.nvim_buf_set_extmark(0, ScopeMaster.config.namespace, lnum_extmark, extmark_level, {
+        vim.api.nvim_buf_set_extmark(0, ScopeMaster.config.namespace, lnum_extmark, 0, {
             virt_text = { { virt_text, ScopeMaster.config.highlight } },
-            virt_text_pos = "overlay"
+            virt_text_win_col = extmark_level
         })
     end
 end
