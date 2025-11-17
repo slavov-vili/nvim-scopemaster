@@ -167,6 +167,7 @@ end
 
 
 
+-- FIXME: motions should work with virtual columns, not indent size
 function ScopeMaster.create_motions()
     ScopeMaster.create_motion(ScopeMaster.config.motions.scope_left,
     function() ScopeMaster.goto_scope_horizontal("left") end,
@@ -202,7 +203,9 @@ function ScopeMaster.create_motions()
 end
 
 function ScopeMaster.create_motion(keymap, func, desc)
-    vim.keymap.set({'n','o','x'}, keymap, func, { desc = desc })
+    if keymap then
+        vim.keymap.set({'n','o','x'}, keymap, func, { desc = desc })
+    end
 end
 
 
@@ -283,12 +286,14 @@ end
 
 
 function ScopeMaster.get_indent_for_scope(lnum)
-    local lnum = is_empty_line(lnum) and vim.fn.prevnonblank(lnum - 1) or lnum
+    -- local lnum = is_empty_line(lnum) and vim.fn.prevnonblank(lnum - 1) or lnum
     local indent = get_indent(lnum)
     if ScopeMaster.config.scope_mode == "cursor" then
+        -- print("Indent = " .. indent .. ", cur_col = " .. get_cur_col())
         indent = math.min(indent, get_cur_col())
         local indent_size = get_indent_size()
         indent = math.ceil(indent / indent_size) * indent_size
+        -- print("ceil(indent / indent_size) * indent_size = " .. indent .. ", with indent_size = " .. indent_size)
     end
     return indent
 end
@@ -331,17 +336,22 @@ function ScopeMaster.draw_scope(lnum)
     for lnum_extmark = scope.top, ScopeMaster.get_scope_end(scope, "bot") - 1 do
         local extmark_level = scope.indent - get_indent_size()
         local virt_text = ScopeMaster.config.symbol
+        -- print("Drawing extmark at " .. lnum_extmark .. ", " .. extmark_level)
 
-        if is_empty_line(lnum_extmark + 1) then
-            virt_text = get_padding(extmark_level) .. virt_text
-            extmark_level = 0
-        end
+        -- if is_empty_line(lnum_extmark + 1) then
+        --     virt_text = get_padding(extmark_level) .. virt_text
+        --     extmark_level = 0
+        -- end
 
         vim.api.nvim_buf_set_extmark(0, ScopeMaster.config.namespace, lnum_extmark, 0, {
             virt_text = { { virt_text, ScopeMaster.config.highlight } },
             virt_text_win_col = extmark_level
         })
     end
+
+
+
+
 end
 
 
