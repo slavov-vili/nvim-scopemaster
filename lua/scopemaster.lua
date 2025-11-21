@@ -43,31 +43,29 @@ local function is_empty_line(lnum)
     return vim.fn.col({lnum, "$"}) == 1
 end
 
-local function get_padding(pad_size)
-    return string.rep(' ', pad_size)
-end
-
 local function add_to_jumplist()
     vim.cmd("normal! m'")
 end
 
+-- TODO: extract line boundary logic in own function
 local function find_border(lnum, cur_indent, direction)
     local increment = -1
     local next_lnum_finder = vim.fn.prevnonblank
     if direction == "down" then
         increment = 1
         next_lnum_finder = function (lnum)
-            local nextnonblank = vim.fn.nextnonblank(lnum)
-            return nextnonblank == 0 and get_last_lnum() + 1 or nextnonblank
+            local next_lnum = ScopeMaster.config.greedy and vim.fn.nextnonblank(lnum) or lnum + 1
+            return next_lnum == 0 and get_last_lnum() + 1 or next_lnum
         end
     end
+
 
     local next_lnum = lnum
     local next_indent = cur_indent
     repeat
         next_lnum = next_lnum_finder(next_lnum + increment)
         next_indent = get_indent(next_lnum)
-    until next_indent < cur_indent
+    until next_lnum <= 0 or next_lnum >= get_last_lnum() or next_indent < cur_indent
 
     return next_lnum
 end
@@ -77,6 +75,8 @@ end
 local Condition = {}
 Condition.equals = function(a, b) return a == b end
 Condition.notequals = function(a, b) return a ~= b end
+Condition.lessthan = function(a, b) return a < b end
+Condition.morethan = function(a, b) return a > b end
 
 
 
@@ -193,11 +193,11 @@ function ScopeMaster.create_motions()
     'Go to the bot end of the current scope')
 
     ScopeMaster.create_motion(ScopeMaster.config.motions.scope_prev,
-    function() ScopeMaster.goto_scope_vertical("up", Condition.notequals) end,
+    function() ScopeMaster.goto_scope_vertical("up", Condition.lessthan) end,
     'Go to the end of the previous differing scope')
 
     ScopeMaster.create_motion(ScopeMaster.config.motions.scope_next,
-    function() ScopeMaster.goto_scope_vertical("down", Condition.notequals) end,
+    function() ScopeMaster.goto_scope_vertical("down", Condition.morethan) end,
     'Go to the beginning of the next differing indentation scope')
 
     ScopeMaster.create_motion(ScopeMaster.config.motions.sibling_prev,
@@ -220,17 +220,16 @@ end
 function ScopeMaster.goto_scope_horizontal(direction)
     local lnum = get_cur_lnum()
     local indent_size = get_indent_size()
-    local max_indent = get_indent(lnum)
 
-    local limit_enforcer = function(next_indent) return math.max(0, next_indent) end
-    local increment = -indent_size
-    if direction == "right" then
-        limit_enforcer = function(next_indent) return math.min(next_indent, max_indent) end
-        increment = indent_size
+    local limit_enforcer = function(next_indent)
+        local max_indent = get_indent(lnum)
+        local result = math.min(next_indent, max_indent)
+        return math.max(0, result)
     end
 
     local count = vim.v.count1
     local pos = get_cur_pos()
+    local increment = direction == "right" and indent_size or -indent_size
     local next_indent = pos[2] + count * increment
     next_indent = next_indent - (next_indent % indent_size)
     pos[1] = lnum
@@ -240,23 +239,25 @@ end
 
 
 
--- FIXME: go to beginning of scope or something?
+-- FIXME: use get_indent_for_scope so that it works in cursor mode as well?
+-- FIXME: add flag for only searching within the scope?
 function ScopeMaster.goto_scope_vertical(direction, condition, is_jump)
-    local next_line = vim.fn.nextnonblank
     local increment = 1
+    local next_line = vim.fn.nextnonblank
     if direction == "up" then
-        next_line = vim.fn.prevnonblank
         increment = -1
+        next_line = vim.fn.prevnonblank
     end
 
     local lnum = get_cur_lnum()
     local next_indent = nil
     for _ = 1, vim.v.count1 do
         local indent = get_indent(lnum)
+        indent = indent == 0 and -1 or indent
         repeat
             lnum = next_line(lnum + increment)
             next_indent = get_indent(lnum)
-        until lnum <= 0 or condition(indent, next_indent)
+        until lnum <= 0 or condition(next_indent, indent)
     end
 
     if lnum == 0 then
@@ -269,7 +270,6 @@ function ScopeMaster.goto_scope_vertical(direction, condition, is_jump)
     if is_jump then
         add_to_jumplist()
     end
-    print("Current position = " .. pos[1] .. ", " .. pos[2])
     set_cur_pos(pos)
 end
 
@@ -302,11 +302,9 @@ function ScopeMaster.get_indent_for_scope(lnum)
     -- local lnum = is_empty_line(lnum) and vim.fn.prevnonblank(lnum - 1) or lnum
     local indent = get_indent(lnum)
     if ScopeMaster.config.scope_mode == "cursor" then
-        -- print("Indent = " .. indent .. ", cur_col = " .. get_cur_col())
         indent = math.min(indent, get_cur_col())
         local indent_size = get_indent_size()
         indent = math.ceil(indent / indent_size) * indent_size
-        -- print("ceil(indent / indent_size) * indent_size = " .. indent .. ", with indent_size = " .. indent_size)
     end
     return indent
 end
@@ -315,6 +313,9 @@ end
 
 function ScopeMaster.find_scope(lnum)
     local lnum = get_lnum(lnum)
+    if is_empty_line(lnum) then
+        return ScopeMaster.find_scope(vim.fn.prevnonblank(lnum))
+    end
     local indent = ScopeMaster.get_indent_for_scope(lnum)
 
     local top = find_border(lnum, indent, "up")
@@ -329,7 +330,7 @@ end
 
 
 function ScopeMaster.draw_scope(lnum)
-    -- FIXME: only clear if indent changes?
+    -- TODO: only clear if scope changes?
     vim.api.nvim_buf_clear_namespace(0, ScopeMaster.config.namespace, 0, -1)
 
     if ScopeMaster.config.scope_mode == "" then
@@ -337,11 +338,9 @@ function ScopeMaster.draw_scope(lnum)
     end
 
     local scope = ScopeMaster.find_scope(lnum)
-    if scope.indent == 0 then
+    if scope.indent <= 0 then
         return
     end
-
-    -- print("Found scope: indent=" .. scope.indent .. ", top =" .. scope.top .. ", bot=" .. scope.bot)
 
     -- NOTE: extmarks are 0-based, but lnums are 1-based
     -- although top is the border, the extmark is drawn on the next line
@@ -349,22 +348,12 @@ function ScopeMaster.draw_scope(lnum)
     for lnum_extmark = scope.top, ScopeMaster.get_scope_end(scope, "bot") - 1 do
         local extmark_level = scope.indent - get_indent_size()
         local virt_text = ScopeMaster.config.symbol
-        -- print("Drawing extmark at " .. lnum_extmark .. ", " .. extmark_level)
-
-        -- if is_empty_line(lnum_extmark + 1) then
-        --     virt_text = get_padding(extmark_level) .. virt_text
-        --     extmark_level = 0
-        -- end
 
         vim.api.nvim_buf_set_extmark(0, ScopeMaster.config.namespace, lnum_extmark, 0, {
             virt_text = { { virt_text, ScopeMaster.config.highlight } },
             virt_text_win_col = extmark_level
         })
     end
-
-
-
-
 end
 
 
