@@ -6,23 +6,6 @@ local function get_cur_lnum()
     return vim.fn.line(".")
 end
 
--- Returns the virtual column
-local function get_cur_col()
-    return vim.fn.virtcol(".", 1)[1]
-end
-
-local function get_cur_pos()
-    return { get_cur_lnum(), get_cur_col() }
-end
-
-local function set_cur_pos(virt_pos)
-    local lnum = virt_pos[1]
-    local col = virt_pos[2]
-    col = vim.fn.virtcol2col(0, lnum, col) - 1
-    vim.api.nvim_win_set_cursor(0, { lnum, col })
-end
-
-
 local function get_last_lnum()
     return vim.fn.line("$")
 end
@@ -31,43 +14,48 @@ local function get_lnum(lnum)
     return lnum == nil and get_cur_lnum() or lnum
 end
 
-local function get_indent_size()
-    return vim.fn.shiftwidth()
+local function check_lnum(lnum)
+    return lnum >= 1 and lnum <= get_last_lnum()
 end
 
-local function get_indent(lnum)
-    return vim.fn.indent(lnum)
+
+local function force_lnum(lnum)
+    return math.max(1, math.min(lnum, get_last_lnum()))
 end
 
 local function is_empty_line(lnum)
     return vim.fn.col({lnum, "$"}) == 1
 end
 
-local function add_to_jumplist()
-    vim.cmd("normal! m'")
+local function get_indent(lnum)
+    return vim.fn.indent(lnum)
 end
 
--- TODO: extract line boundary logic in own function
-local function find_border(lnum, cur_indent, direction)
-    local increment = -1
-    local next_lnum_finder = vim.fn.prevnonblank
-    if direction == "down" then
-        increment = 1
-        next_lnum_finder = function (lnum)
-            local next_lnum = ScopeMaster.config.greedy and vim.fn.nextnonblank(lnum) or lnum + 1
-            return next_lnum == 0 and get_last_lnum() + 1 or next_lnum
-        end
-    end
+local function get_indent_size()
+    return vim.fn.shiftwidth()
+end
 
+-- Returns the virtual column
+local function get_cur_col()
+    return vim.fn.virtcol(".", 1)[1]
+end
 
-    local next_lnum = lnum
-    local next_indent = cur_indent
-    repeat
-        next_lnum = next_lnum_finder(next_lnum + increment)
-        next_indent = get_indent(next_lnum)
-    until next_lnum <= 0 or next_lnum >= get_last_lnum() or next_indent < cur_indent
+local function force_col(lnum, col)
+    return math.max(0, math.min(col, get_indent(lnum)))
+end
 
-    return next_lnum
+local function get_cur_pos()
+    return { lnum = get_cur_lnum(), col = get_cur_col() }
+end
+
+local function set_cur_pos(virt_pos)
+    local lnum = force_lnum(virt_pos.lnum)
+    local col = force_col(virt_pos.lnum, vim.fn.virtcol2col(0, virt_pos.lnum, virt_pos.col) - 1)
+    vim.api.nvim_win_set_cursor(0, { lnum, col })
+end
+
+local function add_to_jumplist()
+    vim.cmd("normal! m'")
 end
 
 
@@ -158,23 +146,21 @@ end
 
 
 
--- FIXME: doing around empty line throws error (bot outside buffer?)
 function ScopeMaster.select_scope(around)
     local scope = ScopeMaster.find_scope()
     local top = around and scope.top or scope.top + 1
     local bot = around and scope.bot or scope.bot - 1
 
-    local col = get_cur_pos()[2]
+    local col = get_cur_pos().col
 
     vim.cmd("normal! V")
-    set_cur_pos({bot, col})
+    set_cur_pos({lnum = bot, col = col})
     vim.cmd("normal! o")
-    set_cur_pos({top, col})
+    set_cur_pos({lnum = top, col = col})
 end
 
 
 
--- FIXME: motions should work with virtual columns, not indent size
 function ScopeMaster.create_motions()
     ScopeMaster.create_motion(ScopeMaster.config.motions.scope_left,
     function() ScopeMaster.goto_scope_horizontal("left") end,
@@ -186,19 +172,19 @@ function ScopeMaster.create_motions()
 
     ScopeMaster.create_motion(ScopeMaster.config.motions.scope_start,
     function() ScopeMaster.goto_scope_end("top") end,
-    'Go to the top end of the current scope')
+    'Go to the start of the current scope')
 
     ScopeMaster.create_motion(ScopeMaster.config.motions.scope_end,
     function() ScopeMaster.goto_scope_end("bot") end,
-    'Go to the bot end of the current scope')
+    'Go to the end of the current scope')
 
     ScopeMaster.create_motion(ScopeMaster.config.motions.scope_prev,
     function() ScopeMaster.goto_scope_vertical("up", Condition.lessthan) end,
-    'Go to the end of the previous differing scope')
+    'Go to the end of the parent scope')
 
     ScopeMaster.create_motion(ScopeMaster.config.motions.scope_next,
     function() ScopeMaster.goto_scope_vertical("down", Condition.morethan) end,
-    'Go to the beginning of the next differing indentation scope')
+    'Go to the beginning of the next child scope')
 
     ScopeMaster.create_motion(ScopeMaster.config.motions.sibling_prev,
     function() ScopeMaster.goto_scope_vertical("up", Condition.equals, true) end,
@@ -217,29 +203,26 @@ end
 
 
 
+-- TODO: wrap around at each end?
 function ScopeMaster.goto_scope_horizontal(direction)
-    local lnum = get_cur_lnum()
-    local indent_size = get_indent_size()
-
-    local limit_enforcer = function(next_indent)
-        local max_indent = get_indent(lnum)
-        local result = math.min(next_indent, max_indent)
-        return math.max(0, result)
+    local pos = get_cur_pos()
+    if is_empty_line(pos.lnum) then
+        return
     end
 
-    local count = vim.v.count1
-    local pos = get_cur_pos()
+    local indent_size = get_indent_size()
     local increment = direction == "right" and indent_size or -indent_size
-    local next_indent = pos[2] + count * increment
+
+    local count = vim.v.count1
+    local next_indent = pos.col + count * increment
     next_indent = next_indent - (next_indent % indent_size)
-    pos[1] = lnum
-    pos[2] = limit_enforcer(next_indent) + 1
+    pos.col = next_indent + 1
     set_cur_pos(pos)
 end
 
 
 
--- FIXME: use get_indent_for_scope so that it works in cursor mode as well?
+-- TODO: wrap around at each end? Watch out for when not equal?
 -- FIXME: add flag for only searching within the scope?
 function ScopeMaster.goto_scope_vertical(direction, condition, is_jump)
     local increment = 1
@@ -252,11 +235,11 @@ function ScopeMaster.goto_scope_vertical(direction, condition, is_jump)
     local lnum = get_cur_lnum()
     local next_indent = nil
     for _ = 1, vim.v.count1 do
-        local indent = get_indent(lnum)
+        local indent = ScopeMaster.get_indent_for_scope(lnum)
         indent = indent == 0 and -1 or indent
         repeat
             lnum = next_line(lnum + increment)
-            next_indent = get_indent(lnum)
+            next_indent = ScopeMaster.get_indent_for_scope(lnum)
         until lnum <= 0 or condition(next_indent, indent)
     end
 
@@ -265,8 +248,8 @@ function ScopeMaster.goto_scope_vertical(direction, condition, is_jump)
     end
 
     local pos = get_cur_pos()
-    pos[1] = lnum
-    pos[2] = next_indent + 1
+    pos.lnum = lnum
+    pos.col = next_indent + 1
     if is_jump then
         add_to_jumplist()
     end
@@ -275,11 +258,11 @@ end
 
 
 
--- FIXME: empty lines are always at cursor position 0, which breaks things... (going from indent 8 to empty line, now can't go back, because the line is at 0)
 function ScopeMaster.goto_scope_end(border)
     local pos = get_cur_pos()
-    local scope = ScopeMaster.find_scope(pos[1])
-    pos[1] = ScopeMaster.get_scope_end(scope, border)
+    local scope = ScopeMaster.find_scope(pos.lnum)
+    pos.lnum = ScopeMaster.get_scope_end(scope, border)
+    pos.col = pos.col
     add_to_jumplist()
     set_cur_pos(pos)
 end
@@ -299,7 +282,6 @@ end
 
 
 function ScopeMaster.get_indent_for_scope(lnum)
-    -- local lnum = is_empty_line(lnum) and vim.fn.prevnonblank(lnum - 1) or lnum
     local indent = get_indent(lnum)
     if ScopeMaster.config.scope_mode == "cursor" then
         indent = math.min(indent, get_cur_col())
@@ -311,6 +293,31 @@ end
 
 
 
+-- Add configuration for maximum lines to search
+function ScopeMaster.find_border(lnum, cur_indent, direction)
+    local increment = -1
+    local next_lnum_finder = vim.fn.prevnonblank
+    if direction == "down" then
+        increment = 1
+        next_lnum_finder = function (lnum)
+            local next_lnum = ScopeMaster.config.greedy and vim.fn.nextnonblank(lnum) or lnum + 1
+            return next_lnum == 0 and get_last_lnum() + 1 or next_lnum
+        end
+    end
+
+
+    local next_lnum = lnum
+    local next_indent = cur_indent
+    repeat
+        next_lnum = next_lnum_finder(next_lnum + increment)
+        next_indent = get_indent(next_lnum)
+    until not check_lnum(next_lnum) or next_indent < cur_indent
+
+    return next_lnum
+end
+
+
+
 function ScopeMaster.find_scope(lnum)
     local lnum = get_lnum(lnum)
     if is_empty_line(lnum) then
@@ -318,8 +325,8 @@ function ScopeMaster.find_scope(lnum)
     end
     local indent = ScopeMaster.get_indent_for_scope(lnum)
 
-    local top = find_border(lnum, indent, "up")
-    local bot = find_border(lnum, indent, "down")
+    local top = ScopeMaster.find_border(lnum, indent, "up")
+    local bot = ScopeMaster.find_border(lnum, indent, "down")
     return {
         indent = indent,
         top = top,
