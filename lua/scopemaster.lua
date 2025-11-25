@@ -203,7 +203,6 @@ end
 
 
 
--- TODO: wrap around at each end?
 function ScopeMaster.goto_scope_horizontal(direction)
     local pos = get_cur_pos()
     if is_empty_line(pos.lnum) then
@@ -211,12 +210,12 @@ function ScopeMaster.goto_scope_horizontal(direction)
     end
 
     local indent_size = get_indent_size()
-    local increment = direction == "right" and indent_size or -indent_size
+    local increment = direction == "right" and 1 or -1
 
-    local count = vim.v.count1
-    local next_indent = pos.col + count * increment
-    next_indent = next_indent - (next_indent % indent_size)
-    pos.col = next_indent + 1
+    local max_indent_level = math.floor(get_indent(pos.lnum) / indent_size)
+    local cur_indent_level = math.floor(pos.col / indent_size)
+    local next_level = (cur_indent_level + vim.v.count1 * increment) % (max_indent_level + 1)
+    pos.col = next_level * indent_size + 1
     set_cur_pos(pos)
 end
 
