@@ -2,6 +2,11 @@ local ScopeMaster = {}
 
 
 
+
+local function force_value(val, min, max)
+    return math.max(min, math.min(val, max))
+end
+
 local function get_cur_lnum()
     return vim.fn.line(".")
 end
@@ -18,9 +23,8 @@ local function check_lnum(lnum)
     return lnum >= 1 and lnum <= get_last_lnum()
 end
 
-
 local function force_lnum(lnum)
-    return math.max(1, math.min(lnum, get_last_lnum()))
+    return force_value(lnum, 1, get_last_lnum())
 end
 
 local function is_empty_line(lnum)
@@ -41,7 +45,7 @@ local function get_cur_col()
 end
 
 local function force_col(lnum, col)
-    return math.max(0, math.min(col, get_indent(lnum)))
+    return force_value(col, 0, get_indent(lnum))
 end
 
 local function get_cur_pos()
@@ -68,8 +72,10 @@ Condition.morethan = function(a, b) return a > b end
 
 
 
+-- FIXME: add custom highlight?
 ScopeMaster.config = {
-    scope_mode = "line",
+    scope_mode = "line", -- one of: none, line, cursor
+    border_preview = "both", -- one of: none, top, bot, both
     symbol = "|",
     highlight = "Comment",
     namespace = vim.api.nvim_create_namespace("ScopeMaster"),
@@ -94,6 +100,7 @@ ScopeMaster.config = {
 
 function ScopeMaster.setup(opts)
     ScopeMaster.config = vim.tbl_deep_extend("force", ScopeMaster.config, opts or {})
+    -- FIXME: add checks for config values
     ScopeMaster.create_autocmds()
     ScopeMaster.create_user_commands()
     ScopeMaster.create_motions()
@@ -222,6 +229,7 @@ end
 
 
 -- TODO: wrap around at each end? Watch out for when not equal?
+-- Add argument for generating first and last line in scope and whether to wrap
 -- FIXME: add flag for only searching within the scope?
 function ScopeMaster.goto_scope_vertical(direction, condition, is_jump)
     local increment = 1
@@ -235,11 +243,13 @@ function ScopeMaster.goto_scope_vertical(direction, condition, is_jump)
     local next_indent = nil
     for _ = 1, vim.v.count1 do
         local indent = ScopeMaster.get_indent_for_scope(lnum)
-        indent = indent == 0 and -1 or indent
+        -- FIXME: what is this here for?
+        -- prevents infinite loops ?
+        -- indent = indent == 0 and -1 or indent
         repeat
             lnum = next_line(lnum + increment)
             next_indent = ScopeMaster.get_indent_for_scope(lnum)
-        until lnum <= 0 or condition(next_indent, indent)
+        until not check_lnum(lnum) or condition(next_indent, indent)
     end
 
     if lnum == 0 then
