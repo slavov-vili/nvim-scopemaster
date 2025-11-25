@@ -80,6 +80,8 @@ ScopeMaster.config = {
     highlight = "Comment",
     namespace = vim.api.nvim_create_namespace("ScopeMaster"),
     greedy = true,
+    horizontal_wrap = true,
+    vertical_wrap = true,
     text_objects = {
         around = "aS",
         inside = "iS",
@@ -170,11 +172,11 @@ end
 
 function ScopeMaster.create_motions()
     ScopeMaster.create_motion(ScopeMaster.config.motions.scope_left,
-    function() ScopeMaster.goto_scope_horizontal("left") end,
+    function() ScopeMaster.goto_scope_horizontal("left", ScopeMaster.config.horizontal_wrap) end,
     'Go to the next scope to the left')
 
     ScopeMaster.create_motion(ScopeMaster.config.motions.scope_right,
-    function() ScopeMaster.goto_scope_horizontal("right") end,
+    function() ScopeMaster.goto_scope_horizontal("right", ScopeMaster.config.horizontal_wrap) end,
     'Go to the next scope to the right')
 
     ScopeMaster.create_motion(ScopeMaster.config.motions.scope_start,
@@ -210,7 +212,7 @@ end
 
 
 
-function ScopeMaster.goto_scope_horizontal(direction)
+function ScopeMaster.goto_scope_horizontal(direction, wrap)
     local pos = get_cur_pos()
     if is_empty_line(pos.lnum) then
         return
@@ -221,7 +223,10 @@ function ScopeMaster.goto_scope_horizontal(direction)
 
     local max_indent_level = math.floor(get_indent(pos.lnum) / indent_size)
     local cur_indent_level = math.floor(pos.col / indent_size)
-    local next_level = (cur_indent_level + vim.v.count1 * increment) % (max_indent_level + 1)
+    local next_level = cur_indent_level + vim.v.count1 * increment
+    if wrap then
+        next_level = next_level % (max_indent_level + 1)
+    end
     pos.col = next_level * indent_size + 1
     set_cur_pos(pos)
 end
