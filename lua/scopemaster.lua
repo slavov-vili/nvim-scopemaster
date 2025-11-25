@@ -352,11 +352,11 @@ function ScopeMaster.draw_scope(lnum)
     -- NOTE: extmarks are 0-based, but lnums are 1-based
     -- although top is the border, the extmark is drawn on the next line
     -- Bot needs to be decremented
-    for lnum_extmark = scope.top, ScopeMaster.get_scope_end(scope, "bot") - 1 do
+    for i = scope.top, ScopeMaster.get_scope_end(scope, "bot") - 1, 1 do
         local extmark_level = scope.indent - get_indent_size()
         local virt_text = ScopeMaster.config.symbol
 
-        vim.api.nvim_buf_set_extmark(0, ScopeMaster.config.namespace, lnum_extmark, 0, {
+        vim.api.nvim_buf_set_extmark(0, ScopeMaster.config.namespace, i, 0, {
             virt_text = { { virt_text, ScopeMaster.config.highlight } },
             virt_text_win_col = extmark_level
         })
