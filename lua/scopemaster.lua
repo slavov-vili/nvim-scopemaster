@@ -2,11 +2,12 @@ local ScopeMaster = {}
 
 
 
-local Condition = {}
-Condition.equals = function(a, b) return a == b end
-Condition.notequals = function(a, b) return a ~= b end
-Condition.lessthan = function(a, b) return a < b end
-Condition.morethan = function(a, b) return a > b end
+local Condition = {
+    equals = function(a, b) return a == b end,
+    notequals = function(a, b) return a ~= b end,
+    lessthan = function(a, b) return a < b end,
+    morethan = function(a, b) return a > b end,
+}
 
 
 
@@ -69,9 +70,20 @@ local function add_to_jumplist()
     vim.cmd("normal! m'")
 end
 
+local function get_border_preview_winids()
+    local winids = vim.w.scopemaster_border_winids
+    return winids and winids or {}
+end
+
+local function set_border_preview_winid(border, winid)
+    local winids = vim.w.scopemaster_border_winids
+    winids = winids and winids or {}
+    winids[border] = winid
+    vim.w.scopemaster_border_winids = winids
+end
 
 
--- FIXME: this is always true when border_lnum is 0, so fix it!
+
 local function make_preview_opts(border, border_lnum)
     local preview_lnum = vim.fn.line('w0')
     local preview_condition = Condition.lessthan
@@ -88,6 +100,16 @@ local function make_preview_opts(border, border_lnum)
         should_preview = check_lnum(border_lnum) and preview_condition(border_lnum, preview_lnum),
         winrow = winrow,
     }
+end
+
+
+
+local BoundFinders = {}
+BoundFinders.scope = function(lnum)
+    local bounds = ScopeMaster.find_scope(lnum)
+    bounds.top = bounds.top + 1
+    bounds.bot = bounds.bot - 1
+    return bounds
 end
 
 
@@ -216,11 +238,21 @@ function ScopeMaster.create_motions()
     'Go to the beginning of the next child scope')
 
     ScopeMaster.create_motion(ScopeMaster.config.motions.sibling_prev,
-    function() ScopeMaster.goto_scope_vertical("up", Condition.equals, true) end,
+    function() ScopeMaster.goto_scope_vertical("up", Condition.equals,
+        {
+            bounded = true,
+            bound_finder = BoundFinders.scope,
+        }, true)
+    end,
     'Go to the previous sibling scope')
 
     ScopeMaster.create_motion(ScopeMaster.config.motions.sibling_next,
-    function() ScopeMaster.goto_scope_vertical("down", Condition.equals, true) end,
+    function() ScopeMaster.goto_scope_vertical("down", Condition.equals,
+        {
+            bounded = true,
+            bound_finder = BoundFinders.scope,
+        }, true)
+    end,
     'Go to the next sibling indentation scope')
 end
 
@@ -266,24 +298,34 @@ function ScopeMaster.goto_scope_vertical(direction, condition, search_opts, is_j
     end
 
     local lnum = get_cur_lnum()
+    local next_lnum = lnum
     local next_indent = nil
     for _ = 1, vim.v.count1 do
-        local indent = ScopeMaster.get_indent_for_scope(lnum)
+        local indent = ScopeMaster.get_indent_for_scope(next_lnum)
         -- FIXME: what is this here for?
         -- prevents infinite loops ?
         -- indent = indent == 0 and -1 or indent
         repeat
-            lnum = next_line(lnum + increment)
-            next_indent = ScopeMaster.get_indent_for_scope(lnum)
-        until not check_lnum(lnum) or condition(next_indent, indent)
+            next_lnum = next_line(next_lnum + increment)
+            next_indent = ScopeMaster.get_indent_for_scope(next_lnum)
+        until not check_lnum(next_lnum) or condition(next_indent, indent)
+
+        if search_opts.bounded then
+            local bounds = search_opts.bound_finder(lnum)
+            if next_lnum > bounds.bot then
+                next_lnum = bounds.top
+            elseif next_lnum < bounds.top then
+                next_lnum = bounds.bot
+            end
+        end
     end
 
-    if lnum == 0 then
+    if next_lnum == 0 then
         return
     end
 
     local pos = get_cur_pos()
-    pos.lnum = lnum
+    pos.lnum = next_lnum
     pos.col = next_indent + 1
     if is_jump then
         add_to_jumplist()
@@ -328,14 +370,14 @@ end
 
 
 
--- Add configuration for maximum lines to search
+-- TODO: Add configuration for maximum lines to search?
 function ScopeMaster.find_border(lnum, cur_indent, direction)
     local increment = -1
     local next_lnum_finder = vim.fn.prevnonblank
     if direction == "down" then
         increment = 1
-        next_lnum_finder = function (lnum)
-            local next_lnum = ScopeMaster.config.greedy and vim.fn.nextnonblank(lnum) or lnum + 1
+        next_lnum_finder = function (prev_lnum)
+            local next_lnum = ScopeMaster.config.greedy and vim.fn.nextnonblank(prev_lnum) or prev_lnum + 1
             return next_lnum == 0 and get_last_lnum() + 1 or next_lnum
         end
     end
@@ -371,9 +413,6 @@ end
 
 
 
--- FIXME: create a window-specific variable or something?
--- how does this work with splits?
-local winids = {}
 function ScopeMaster.draw_a_border(scope, border)
     local border_lnum = scope[border]
     local preview_opts = make_preview_opts(border, border_lnum)
@@ -391,16 +430,16 @@ function ScopeMaster.draw_a_border(scope, border)
             noautocmd = true,
         })
         vim.api.nvim_win_set_cursor(winid, { force_lnum(border_lnum), 0 })
-        winids[border] = winid
+        set_border_preview_winid(border, winid)
     end
 end
 
 
 
 function ScopeMaster.draw_borders(scope)
-    for border, winid in pairs(winids) do
+    for border, winid in pairs(get_border_preview_winids()) do
         vim.api.nvim_win_close(winid, true)
-        winids[border] = nil
+        set_border_preview_winid(border, nil)
     end
 
     local border_preview = ScopeMaster.config.border_preview
