@@ -2,6 +2,13 @@ local ScopeMaster = {}
 
 
 
+local Condition = {}
+Condition.equals = function(a, b) return a == b end
+Condition.notequals = function(a, b) return a ~= b end
+Condition.lessthan = function(a, b) return a < b end
+Condition.morethan = function(a, b) return a > b end
+
+
 
 local function force_value(val, min, max)
     return math.max(min, math.min(val, max))
@@ -64,11 +71,24 @@ end
 
 
 
-local Condition = {}
-Condition.equals = function(a, b) return a == b end
-Condition.notequals = function(a, b) return a ~= b end
-Condition.lessthan = function(a, b) return a < b end
-Condition.morethan = function(a, b) return a > b end
+-- FIXME: this is always true when border_lnum is 0, so fix it!
+local function make_preview_opts(border, border_lnum)
+    local preview_lnum = vim.fn.line('w0')
+    local preview_condition = Condition.lessthan
+    local winrow = 0
+
+    if 'bot' == border then
+        preview_lnum = vim.fn.line('w$')
+        preview_condition = Condition.morethan
+        winrow = vim.api.nvim_win_get_height(0) - 1
+    end
+
+    return {
+        preview_lnum = preview_lnum,
+        should_preview = check_lnum(border_lnum) and preview_condition(border_lnum, preview_lnum),
+        winrow = winrow,
+    }
+end
 
 
 
@@ -236,7 +256,8 @@ end
 -- TODO: wrap around at each end? Watch out for when not equal?
 -- Add argument for generating first and last line in scope and whether to wrap
 -- FIXME: add flag for only searching within the scope?
-function ScopeMaster.goto_scope_vertical(direction, condition, is_jump)
+-- search_opts = bounded, wrap, topfinder, botfinder? or just finder which takes increment or direction?
+function ScopeMaster.goto_scope_vertical(direction, condition, search_opts, is_jump)
     local increment = 1
     local next_line = vim.fn.nextnonblank
     if direction == "up" then
@@ -350,15 +371,54 @@ end
 
 
 
-function ScopeMaster.draw_scope(lnum)
+-- FIXME: create a window-specific variable or something?
+-- how does this work with splits?
+local winids = {}
+function ScopeMaster.draw_a_border(scope, border)
+    local border_lnum = scope[border]
+    local preview_opts = make_preview_opts(border, border_lnum)
+
+    if preview_opts and preview_opts.should_preview then
+        local winid = vim.api.nvim_open_win(0, false, {
+            relative = 'win',
+            row = preview_opts.winrow,
+            col = 0,
+            width = vim.api.nvim_win_get_width(0),
+            height = 1,
+            focusable = false,
+            mouse = true,
+            zindex = 90,
+            noautocmd = true,
+        })
+        vim.api.nvim_win_set_cursor(winid, { force_lnum(border_lnum), 0 })
+        winids[border] = winid
+    end
+end
+
+
+
+function ScopeMaster.draw_borders(scope)
+    for border, winid in pairs(winids) do
+        vim.api.nvim_win_close(winid, true)
+        winids[border] = nil
+    end
+
+    local border_preview = ScopeMaster.config.border_preview
+
+    for _, border in ipairs({ 'top', 'bot' }) do
+        if border_preview == 'both' or border_preview == border then
+            ScopeMaster.draw_a_border(scope, border)
+        end
+    end
+end
+
+
+
+function ScopeMaster.draw_scope(scope)
     -- TODO: only clear if scope changes?
     vim.api.nvim_buf_clear_namespace(0, ScopeMaster.config.namespace, 0, -1)
 
-    if ScopeMaster.config.scope_mode == "" then
-        return
-    end
-
-    local scope = ScopeMaster.find_scope(lnum)
+    print("Current scope: " .. scope.top .. " -> " .. scope.bot)
     if scope.indent <= 0 then
         return
     end
@@ -380,7 +440,17 @@ end
 
 
 function ScopeMaster.draw()
-    ScopeMaster.draw_scope(get_cur_lnum())
+    local lnum = get_cur_lnum()
+    local scope = nil
+    if ScopeMaster.config.scope_mode ~= "" and ScopeMaster.config.scope_mode ~= "none" then
+        scope = scope and scope or ScopeMaster.find_scope(lnum)
+        ScopeMaster.draw_scope(scope)
+    end
+
+    if ScopeMaster.config.border_preview ~= "" and ScopeMaster.config.border_preview ~= "none" then
+        scope = scope and scope or ScopeMaster.find_scope(lnum)
+        ScopeMaster.draw_borders(scope)
+    end
 end
 
 
