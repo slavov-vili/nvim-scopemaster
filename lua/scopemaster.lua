@@ -230,11 +230,21 @@ function ScopeMaster.create_motions()
     'Go to the end of the current scope')
 
     ScopeMaster.create_motion(ScopeMaster.config.motions.scope_prev,
-    function() ScopeMaster.goto_scope_vertical("up", Condition.lessthan) end,
+    function() ScopeMaster.goto_scope_vertical("up", Condition.lessthan,
+        {
+            bounded = true,
+            bound_finder = BoundFinders.scope,
+        }, true)
+    end,
     'Go to the end of the parent scope')
 
     ScopeMaster.create_motion(ScopeMaster.config.motions.scope_next,
-    function() ScopeMaster.goto_scope_vertical("down", Condition.morethan) end,
+    function() ScopeMaster.goto_scope_vertical("down", Condition.morethan,
+        {
+            bounded = true,
+            bound_finder = BoundFinders.scope,
+        }, true)
+    end,
     'Go to the beginning of the next child scope')
 
     ScopeMaster.create_motion(ScopeMaster.config.motions.sibling_prev,
@@ -287,7 +297,7 @@ end
 
 -- TODO: wrap around at each end? Watch out for when not equal?
 -- Add argument for generating first and last line in scope and whether to wrap
--- FIXME: add flag for only searching within the scope?
+-- FIXME: differentiate betweeing wrapping and bounding
 -- search_opts = bounded, wrap, topfinder, botfinder? or just finder which takes increment or direction?
 function ScopeMaster.goto_scope_vertical(direction, condition, search_opts, is_jump)
     local increment = 1
@@ -310,6 +320,7 @@ function ScopeMaster.goto_scope_vertical(direction, condition, search_opts, is_j
             next_indent = ScopeMaster.get_indent_for_scope(next_lnum)
         until not check_lnum(next_lnum) or condition(next_indent, indent)
 
+        -- FIXME: check if wrap is on and use bounded in the loop above
         if search_opts.bounded then
             local bounds = search_opts.bound_finder(lnum)
             if next_lnum > bounds.bot then
@@ -319,10 +330,10 @@ function ScopeMaster.goto_scope_vertical(direction, condition, search_opts, is_j
             end
         end
     end
-
-    if next_lnum == 0 then
-        return
-    end
+    --
+    -- if next_lnum == 0 then
+    --     return
+    -- end
 
     local pos = get_cur_pos()
     pos.lnum = next_lnum
