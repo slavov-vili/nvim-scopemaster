@@ -233,6 +233,7 @@ function ScopeMaster.create_motions()
     function() ScopeMaster.goto_scope_vertical("up", Condition.lessthan,
         {
             bounded = true,
+            wrap = false,
             bound_finder = BoundFinders.scope,
         }, true)
     end,
@@ -242,6 +243,7 @@ function ScopeMaster.create_motions()
     function() ScopeMaster.goto_scope_vertical("down", Condition.morethan,
         {
             bounded = true,
+            wrap = false,
             bound_finder = BoundFinders.scope,
         }, true)
     end,
@@ -251,6 +253,7 @@ function ScopeMaster.create_motions()
     function() ScopeMaster.goto_scope_vertical("up", Condition.equals,
         {
             bounded = true,
+            wrap = true,
             bound_finder = BoundFinders.scope,
         }, true)
     end,
@@ -260,6 +263,7 @@ function ScopeMaster.create_motions()
     function() ScopeMaster.goto_scope_vertical("down", Condition.equals,
         {
             bounded = true,
+            wrap = true,
             bound_finder = BoundFinders.scope,
         }, true)
     end,
@@ -296,9 +300,6 @@ end
 
 
 -- TODO: wrap around at each end? Watch out for when not equal?
--- Add argument for generating first and last line in scope and whether to wrap
--- FIXME: differentiate betweeing wrapping and bounding
--- search_opts = bounded, wrap, topfinder, botfinder? or just finder which takes increment or direction?
 function ScopeMaster.goto_scope_vertical(direction, condition, search_opts, is_jump)
     local increment = 1
     local next_line = vim.fn.nextnonblank
@@ -308,32 +309,43 @@ function ScopeMaster.goto_scope_vertical(direction, condition, search_opts, is_j
     end
 
     local lnum = get_cur_lnum()
+    local bounds = search_opts.bound_finder(lnum)
+
     local next_lnum = lnum
     local next_indent = nil
     for _ = 1, vim.v.count1 do
         local indent = ScopeMaster.get_indent_for_scope(next_lnum)
+
         -- FIXME: what is this here for?
         -- prevents infinite loops ?
         -- indent = indent == 0 and -1 or indent
-        repeat
+
+        while true do
             next_lnum = next_line(next_lnum + increment)
             next_indent = ScopeMaster.get_indent_for_scope(next_lnum)
-        until not check_lnum(next_lnum) or condition(next_indent, indent)
 
-        -- FIXME: check if wrap is on and use bounded in the loop above
-        if search_opts.bounded then
-            local bounds = search_opts.bound_finder(lnum)
-            if next_lnum > bounds.bot then
-                next_lnum = bounds.top
-            elseif next_lnum < bounds.top then
-                next_lnum = bounds.bot
+            if (not check_lnum(next_lnum)) then
+                print("Line check was false!")
+                next_lnum = lnum
+                break
+            end
+
+            if condition(next_indent, indent) then
+                break
+            end
+
+            if search_opts.bounded then
+                -- FIXME: do this for wrapping, bounding just leaves things as they are!
+                if next_lnum > bounds.bot then
+                    next_lnum = search_opts.wrap and bounds.top or lnum
+                    break
+                elseif next_lnum < bounds.top then
+                    next_lnum = search_opts.wrap and bounds.bot or lnum
+                    break
+                end
             end
         end
     end
-    --
-    -- if next_lnum == 0 then
-    --     return
-    -- end
 
     local pos = get_cur_pos()
     pos.lnum = next_lnum
@@ -468,7 +480,6 @@ function ScopeMaster.draw_scope(scope)
     -- TODO: only clear if scope changes?
     vim.api.nvim_buf_clear_namespace(0, ScopeMaster.config.namespace, 0, -1)
 
-    print("Current scope: " .. scope.top .. " -> " .. scope.bot)
     if scope.indent <= 0 then
         return
     end
