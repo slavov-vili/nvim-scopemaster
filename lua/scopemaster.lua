@@ -153,16 +153,6 @@ function ScopeMaster.create_user_commands()
         vim.api.nvim_create_user_command(name, func, { desc = description })
     end
 
-    create("ScopeMasterSelectA",
-        function() ScopeMaster.select_scope(true) end,
-        "Selects around the current line's indentation scope"
-    )
-
-    create("ScopeMasterSelectI",
-        function() ScopeMaster.select_scope() end,
-        "Selects inside the current line's indentation scope"
-    )
-
     create("ScopeMasterDraw",
         function() ScopeMaster.draw() end,
         "Draws the current line's indentation scope"
@@ -171,6 +161,16 @@ function ScopeMaster.create_user_commands()
     create("ScopeMasterUndraw",
         function() ScopeMaster.undraw() end,
         "Undraws the current line's indentation scope"
+    )
+
+    create("ScopeMasterSelectI",
+        function() ScopeMaster.select_scope() end,
+        "Selects inside the current line's indentation scope"
+    )
+
+    create("ScopeMasterSelectA",
+        function() ScopeMaster.select_scope(true) end,
+        "Selects around the current line's indentation scope"
     )
 end
 
@@ -190,23 +190,8 @@ end
 
 
 
-function ScopeMaster.select_scope(around)
-    local scope = ScopeMaster.find_scope()
-    local top = around and scope.top or scope.top + 1
-    local bot = around and scope.bot or scope.bot - 1
-
-    local col = U.get_cur_pos().col
-
-    vim.cmd("normal! V")
-    U.set_cur_pos({lnum = bot, col = col})
-    vim.cmd("normal! o")
-    U.set_cur_pos({lnum = top, col = col})
-end
-
-
-
 function ScopeMaster.create_motions()
-    function create(keymap, func, desc)
+    local function create(keymap, func, desc)
         if keymap then
             vim.keymap.set({'n','o','x'}, keymap, func, { desc = desc })
         end
@@ -279,6 +264,204 @@ end
 
 
 
+function ScopeMaster.draw()
+    local lnum = U.get_cur_lnum()
+    local scope = nil
+    if ScopeMaster.config.scope_mode == "line" or ScopeMaster.config.scope_mode == "cursor" then
+        scope = scope and scope or ScopeMaster.find_scope(lnum)
+        ScopeMaster.draw_scope(scope)
+    end
+
+    if ScopeMaster.config.border_preview == "top" or ScopeMaster.config.border_preview == "bot"
+        or ScopeMaster.config.border_preview == "both" then
+        scope = scope and scope or ScopeMaster.find_scope(lnum)
+        ScopeMaster.draw_borders(scope)
+    end
+end
+
+
+
+function ScopeMaster.undraw()
+    ScopeMaster.undraw_scope()
+    ScopeMaster.undraw_borders()
+end
+
+
+
+function ScopeMaster.find_scope(lnum)
+    local lnum = U.get_lnum(lnum)
+    if U.is_empty_line(lnum) then
+        return ScopeMaster.find_scope(vim.fn.prevnonblank(lnum))
+    end
+    local indent = ScopeMaster.get_indent_for_scope(lnum)
+
+    local top = ScopeMaster.find_border(lnum, indent, "up")
+    local bot = ScopeMaster.find_border(lnum, indent, "down")
+    return {
+        indent = indent,
+        top = top,
+        bot = bot,
+    }
+end
+
+
+
+function ScopeMaster.get_indent_for_scope(lnum)
+    local indent = U.get_indent(lnum)
+    if ScopeMaster.config.scope_mode == "cursor" then
+        indent = math.min(indent, U.get_cur_col())
+        local indent_size = U.get_indent_size()
+        indent = math.ceil(indent / indent_size) * indent_size
+    end
+    return indent
+end
+
+
+
+-- TODO: Add configuration for maximum lines to search?
+function ScopeMaster.find_border(lnum, cur_indent, direction)
+    local increment = -1
+    local next_lnum_finder = vim.fn.prevnonblank
+    if direction == "down" then
+        increment = 1
+        next_lnum_finder = function (prev_lnum)
+            local next_lnum = ScopeMaster.config.greedy and vim.fn.nextnonblank(prev_lnum) or prev_lnum + 1
+            return next_lnum == 0 and U.get_last_lnum() + 1 or next_lnum
+        end
+    end
+
+
+    local next_lnum = lnum
+    local next_indent = cur_indent
+    repeat
+        next_lnum = next_lnum_finder(next_lnum + increment)
+        next_indent = U.get_indent(next_lnum)
+    until not U.check_lnum(next_lnum) or next_indent < cur_indent
+
+    return next_lnum
+end
+
+
+
+function ScopeMaster.draw_scope(scope)
+    -- TODO: only clear if scope changes?
+    ScopeMaster.undraw_scope()
+
+    if scope.indent <= 0 then
+        return
+    end
+
+    -- NOTE: extmarks are 0-based, but lnums are 1-based
+    -- although top is the border, the extmark is drawn on the next line
+    -- Bot needs to be decremented
+    for i = scope.top, ScopeMaster.get_scope_end(scope, "bot") - 1, 1 do
+        local extmark_level = scope.indent - U.get_indent_size()
+        local virt_text = ScopeMaster.config.symbol
+
+        vim.api.nvim_buf_set_extmark(0, ScopeMaster.config.namespace, i, 0, {
+            virt_text = { { virt_text, ScopeMaster.config.highlight } },
+            virt_text_win_col = extmark_level
+        })
+    end
+end
+
+
+
+function ScopeMaster.undraw_scope()
+    vim.api.nvim_buf_clear_namespace(0, ScopeMaster.config.namespace, 0, -1)
+end
+
+
+
+function ScopeMaster.get_scope_end(scope, border)
+    local lnum_border = scope[border]
+    if border == "bot" then
+        local lnum_end = lnum_border - 1
+        return ScopeMaster.config.greedy and vim.fn.prevnonblank(lnum_end) or lnum_end
+    end
+
+    return scope["top"] + 1
+end
+
+
+
+function ScopeMaster.draw_borders(scope)
+    ScopeMaster.undraw_borders()
+
+    local border_preview = ScopeMaster.config.border_preview
+    for _, border in ipairs({ 'top', 'bot' }) do
+        if border_preview == 'both' or border_preview == border then
+            ScopeMaster.draw_a_border(scope, border)
+        end
+    end
+end
+
+
+
+function ScopeMaster.undraw_borders()
+    for border, winid in pairs(ScopeMaster.get_border_preview_winids()) do
+        vim.api.nvim_win_close(winid, true)
+        ScopeMaster.set_border_preview_winid(border, nil)
+    end
+end
+
+
+
+function ScopeMaster.draw_a_border(scope, border)
+    local border_lnum = scope[border]
+    local preview_opts = U.make_preview_opts(border, border_lnum)
+    local winid = nil
+
+    if preview_opts and preview_opts.should_preview then
+        winid = vim.api.nvim_open_win(0, false, {
+            relative = 'win',
+            row = preview_opts.winrow,
+            col = 0,
+            width = vim.api.nvim_win_get_width(0),
+            height = 1,
+            focusable = false,
+            mouse = true,
+            zindex = 90,
+            noautocmd = true,
+        })
+        vim.api.nvim_win_set_cursor(winid, { U.force_lnum(border_lnum), 0 })
+    end
+
+    ScopeMaster.set_border_preview_winid(border, winid)
+    return winid
+end
+
+
+
+function ScopeMaster.get_border_preview_winids()
+    local winids = vim.w.scopemaster_border_winids
+    return winids and winids or {}
+end
+
+function ScopeMaster.set_border_preview_winid(border, winid)
+    local winids = vim.w.scopemaster_border_winids
+    winids = winids and winids or {}
+    winids[border] = winid
+    vim.w.scopemaster_border_winids = winids
+end
+
+
+
+function ScopeMaster.select_scope(around)
+    local scope = ScopeMaster.find_scope()
+    local top = around and scope.top or scope.top + 1
+    local bot = around and scope.bot or scope.bot - 1
+
+    local col = U.get_cur_pos().col
+
+    vim.cmd("normal! V")
+    U.set_cur_pos({lnum = bot, col = col})
+    vim.cmd("normal! o")
+    U.set_cur_pos({lnum = top, col = col})
+end
+
+
+
 function ScopeMaster.goto_scope_horizontal(direction, wrap)
     local pos = U.get_cur_pos()
     if U.is_empty_line(pos.lnum) then
@@ -325,7 +508,6 @@ function ScopeMaster.goto_scope_vertical(direction, search_opts, is_jump)
             next_indent = ScopeMaster.get_indent_for_scope(next_lnum)
 
             if (not U.check_lnum(next_lnum)) then
-                print("Line check was false!")
                 next_lnum = lnum
                 break
             end
@@ -369,194 +551,11 @@ end
 
 
 
-function ScopeMaster.get_scope_end(scope, border)
-    local lnum_border = scope[border]
-    if border == "bot" then
-        local lnum_end = lnum_border - 1
-        return ScopeMaster.config.greedy and vim.fn.prevnonblank(lnum_end) or lnum_end
-    end
-
-    return scope["top"] + 1
-end
-
-
-
-function ScopeMaster.get_indent_for_scope(lnum)
-    local indent = U.get_indent(lnum)
-    if ScopeMaster.config.scope_mode == "cursor" then
-        indent = math.min(indent, U.get_cur_col())
-        local indent_size = U.get_indent_size()
-        indent = math.ceil(indent / indent_size) * indent_size
-    end
-    return indent
-end
-
-
-
--- TODO: Add configuration for maximum lines to search?
-function ScopeMaster.find_border(lnum, cur_indent, direction)
-    local increment = -1
-    local next_lnum_finder = vim.fn.prevnonblank
-    if direction == "down" then
-        increment = 1
-        next_lnum_finder = function (prev_lnum)
-            local next_lnum = ScopeMaster.config.greedy and vim.fn.nextnonblank(prev_lnum) or prev_lnum + 1
-            return next_lnum == 0 and U.get_last_lnum() + 1 or next_lnum
-        end
-    end
-
-
-    local next_lnum = lnum
-    local next_indent = cur_indent
-    repeat
-        next_lnum = next_lnum_finder(next_lnum + increment)
-        next_indent = U.get_indent(next_lnum)
-    until not U.check_lnum(next_lnum) or next_indent < cur_indent
-
-    return next_lnum
-end
-
-
-
-function ScopeMaster.find_scope(lnum)
-    local lnum = U.get_lnum(lnum)
-    if U.is_empty_line(lnum) then
-        return ScopeMaster.find_scope(vim.fn.prevnonblank(lnum))
-    end
-    local indent = ScopeMaster.get_indent_for_scope(lnum)
-
-    local top = ScopeMaster.find_border(lnum, indent, "up")
-    local bot = ScopeMaster.find_border(lnum, indent, "down")
-    return {
-        indent = indent,
-        top = top,
-        bot = bot,
-    }
-end
-
-
-
 function ScopeMaster.get_scope_bounds(lnum)
     local bounds = ScopeMaster.find_scope(lnum)
     bounds.top = bounds.top + 1
     bounds.bot = bounds.bot - 1
     return bounds
-end
-
-
-
-function ScopeMaster.draw_a_border(scope, border)
-    local border_lnum = scope[border]
-    local preview_opts = U.make_preview_opts(border, border_lnum)
-    local winid = nil
-
-    if preview_opts and preview_opts.should_preview then
-        winid = vim.api.nvim_open_win(0, false, {
-            relative = 'win',
-            row = preview_opts.winrow,
-            col = 0,
-            width = vim.api.nvim_win_get_width(0),
-            height = 1,
-            focusable = false,
-            mouse = true,
-            zindex = 90,
-            noautocmd = true,
-        })
-        vim.api.nvim_win_set_cursor(winid, { U.force_lnum(border_lnum), 0 })
-    end
-
-    return winid
-end
-
-
-
-function ScopeMaster.get_border_preview_winids()
-    local winids = vim.w.scopemaster_border_winids
-    return winids and winids or {}
-end
-
-function ScopeMaster.set_border_preview_winid(border, winid)
-    local winids = vim.w.scopemaster_border_winids
-    winids = winids and winids or {}
-    winids[border] = winid
-    vim.w.scopemaster_border_winids = winids
-end
-
-
-
-function ScopeMaster.undraw_borders()
-    for border, winid in pairs(ScopeMaster.get_border_preview_winids()) do
-        vim.api.nvim_win_close(winid, true)
-        ScopeMaster.set_border_preview_winid(border, nil)
-    end
-end
-
-
-
-function ScopeMaster.draw_borders(scope)
-    ScopeMaster.undraw_borders()
-
-    local border_preview = ScopeMaster.config.border_preview
-    for _, border in ipairs({ 'top', 'bot' }) do
-        if border_preview == 'both' or border_preview == border then
-            local winid = ScopeMaster.draw_a_border(scope, border)
-            ScopeMaster.set_border_preview_winid(border, winid)
-        end
-    end
-end
-
-
-
-function ScopeMaster.undraw_scope()
-    vim.api.nvim_buf_clear_namespace(0, ScopeMaster.config.namespace, 0, -1)
-end
-
-
-
-function ScopeMaster.draw_scope(scope)
-    -- TODO: only clear if scope changes?
-    ScopeMaster.undraw_scope()
-
-    if scope.indent <= 0 then
-        return
-    end
-
-    -- NOTE: extmarks are 0-based, but lnums are 1-based
-    -- although top is the border, the extmark is drawn on the next line
-    -- Bot needs to be decremented
-    for i = scope.top, ScopeMaster.get_scope_end(scope, "bot") - 1, 1 do
-        local extmark_level = scope.indent - U.get_indent_size()
-        local virt_text = ScopeMaster.config.symbol
-
-        vim.api.nvim_buf_set_extmark(0, ScopeMaster.config.namespace, i, 0, {
-            virt_text = { { virt_text, ScopeMaster.config.highlight } },
-            virt_text_win_col = extmark_level
-        })
-    end
-end
-
-
-
-function ScopeMaster.undraw()
-    ScopeMaster.undraw_scope()
-    ScopeMaster.undraw_borders()
-end
-
-
-
-function ScopeMaster.draw()
-    local lnum = U.get_cur_lnum()
-    local scope = nil
-    if ScopeMaster.config.scope_mode == "line" or ScopeMaster.config.scope_mode == "cursor" then
-        scope = scope and scope or ScopeMaster.find_scope(lnum)
-        ScopeMaster.draw_scope(scope)
-    end
-
-    if ScopeMaster.config.border_preview == "top" or ScopeMaster.config.border_preview == "bot"
-        or ScopeMaster.config.border_preview == "both" then
-        scope = scope and scope or ScopeMaster.find_scope(lnum)
-        ScopeMaster.draw_borders(scope)
-    end
 end
 
 
